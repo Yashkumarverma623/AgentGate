@@ -8,10 +8,11 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from tau_bench.envs.user import BaseUserSimulationEnv
+
 from agentgate.adapter.base import BenchmarkAdapter, BenchmarkTask, GradeResult
 
 
-class GemmaUserSimulationEnv(BaseUserSimulationEnv):
+class GemmaUserSimulationEnv(BaseUserSimulationEnv):  # type: ignore[misc]
     """Direct Google GenAI user simulation environment for Gemma models."""
 
     def __init__(self, model: str = "gemma-4-26b-a4b-it") -> None:
@@ -19,6 +20,8 @@ class GemmaUserSimulationEnv(BaseUserSimulationEnv):
         from google import genai
 
         api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key:
+            api_key = api_key.strip().strip("'\"")
         self.client = genai.Client(api_key=api_key)
         clean_model = model.replace("gemini/", "").replace("models/", "")
         if clean_model in ("gemma-4-26b", "gemma-26b"):

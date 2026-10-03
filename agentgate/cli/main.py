@@ -4,23 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
-import typer
 import numpy as np
-from scipy import stats
+import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from scipy import stats
 
 from agentgate.adapter.tau_bench import TauBenchRetailAdapter
 from agentgate.agent.models import AgentConfig
@@ -93,6 +94,14 @@ def run(
     )
     console.print(f"• Concurrency: {concurrency} | Pacer: Strict per-model rate limits")
 
+    raw_key = os.environ.get("GEMINI_API_KEY")
+    if raw_key:
+        cleaned_key = raw_key.strip().strip("'\"")
+        os.environ["GEMINI_API_KEY"] = cleaned_key
+        console.print(f"• GEMINI_API_KEY found: [green]True[/green] (length: {len(cleaned_key)})")
+    else:
+        console.print("• GEMINI_API_KEY found: [yellow]False[/yellow] (length: 0)")
+
     runner = EvaluationRunner(db_path=db_path)
     manifest = asyncio.run(
         runner.run(
@@ -115,6 +124,13 @@ def run(
     console.print(
         f"Total tokens: {manifest.total_tokens:,} | Would-have-cost: ${manifest.total_would_have_cost:.4f}"
     )
+
+    if manifest.infra_error_trials > 0 or manifest.completed_trials < manifest.total_trials:
+        console.print(
+            f"[bold red]Run {run_id} failed: {manifest.infra_error_trials} infra error(s), "
+            f"{manifest.completed_trials}/{manifest.total_trials} trials completed.[/bold red]"
+        )
+        sys.exit(1)
 
 
 @trace_app.command("show")
@@ -301,7 +317,7 @@ def gate(
                     (run_id, *tasks),
                 )
                 count = cur.fetchone()[0] or 0
-            return count
+            return int(count or 0)
 
     base_calls = _get_call_count(base_id, shared_tasks, shared_base_rows, base_is_json)
     cand_calls = _get_call_count(cand_id, shared_tasks, shared_cand_rows, cand_is_json)
@@ -408,7 +424,7 @@ def gate(
     cand_mean_steps = float(np.mean([r["steps"] for r in shared_cand_rows]))
 
     # Print Header & Delta Table
-    console.print(f"\n[bold cyan]=== AgentGate CI Regression Gate ===[/bold cyan]")
+    console.print("\n[bold cyan]=== AgentGate CI Regression Gate ===[/bold cyan]")
     console.print(f"- Baseline:  [bold]{base_id}[/bold] ({len(shared_base_rows)} trials across {N} shared tasks)")
     console.print(f"- Candidate: [bold]{candidate}[/bold] ({len(shared_cand_rows)} trials across {N} shared tasks)")
     console.print(f"- Tolerance: [bold]{tolerance:.1%}[/bold] allowed drop | Alpha: [bold]{alpha}[/bold]")

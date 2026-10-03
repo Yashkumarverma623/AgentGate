@@ -25,6 +25,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gate')) &&
       (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     env:
       PYTHONPATH: ${{ github.workspace }}/vendor/tau-bench
 
@@ -54,9 +57,22 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
+          # Trim whitespace and quotes from GEMINI_API_KEY at startup
+          if [ -n "$GEMINI_API_KEY" ]; then
+            CLEAN_KEY=$(echo "$GEMINI_API_KEY" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'"'"']//' -e 's/["'"'"']$//')
+            export GEMINI_API_KEY="$CLEAN_KEY"
+            echo "GEMINI_API_KEY found: true (length: ${#CLEAN_KEY})"
+          else
+            echo "GEMINI_API_KEY found: false (length: 0)"
+            echo "❌ [ERROR] GEMINI_API_KEY secret is not set or empty in GitHub repository settings!"
+            echo "Please configure GEMINI_API_KEY in Repository Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
           RUN_ID="pr_${{ github.event.pull_request.number || 'manual' }}_$(date +%s)"
           echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
           # Execute smoke benchmark subset (5 stratified tasks x k=2)
+          RUN_EXIT=0
           uv run agentgate run \
             --run-id "$RUN_ID" \
             --tasks "16,0,10,17,3" \
@@ -64,7 +80,115 @@ jobs:
             --max-steps 30 \
             --model "gemini/gemini-3.1-flash-lite" \
             --prompt-version "v1" \
-            --concurrency 3
+            --concurrency 3 || RUN_EXIT=$?
+
+          # Validate smoke benchmark output integrity (always runs even if runner exited non-zero)
+          VALIDATOR_EXIT=0
+          python3 - << 'EOF' || VALIDATOR_EXIT=$?
+          import os, sys, json, sqlite3
+          from pathlib import Path
+
+          run_id = os.environ.get("RUN_ID")
+          expected_trials = 10
+          db_path = Path("results/agentgate.db")
+
+          print("\n" + "="*50)
+          print("SMOKE BENCHMARK INTEGRITY VALIDATION")
+          print("="*50)
+
+          if not db_path.exists():
+              print(f"❌ [FAIL] Database file '{db_path}' not found!")
+              sys.exit(1)
+
+          with sqlite3.connect(db_path) as conn:
+              conn.row_factory = sqlite3.Row
+              cur = conn.cursor()
+
+              cur.execute("SELECT COUNT(*) FROM trial_results WHERE run_id = ?", (run_id,))
+              completed = cur.fetchone()[0]
+
+              cur.execute("SELECT COUNT(*) FROM trial_results WHERE run_id = ? AND status = 'infra_error'", (run_id,))
+              infra_errors = cur.fetchone()[0]
+
+              cur.execute(
+                  "SELECT COUNT(*) FROM trial_results WHERE run_id = ? AND success = 1 AND (status != 'infra_error' OR status IS NULL)",
+                  (run_id,),
+              )
+              successful = cur.fetchone()[0]
+
+              cur.execute(
+                  "SELECT task_id, trial_id, error, status FROM trial_results WHERE run_id = ? AND error IS NOT NULL AND error != '' LIMIT 1",
+                  (run_id,),
+              )
+              first_err_row = cur.fetchone()
+
+          # Scan for authentication errors
+          AUTH_KEYWORDS = ("401", "403", "api_key", "unauthorized", "permission", "authentication")
+          QUOTA_KEYWORDS = ("quota", "429", "resource_exhausted")
+
+          auth_error = None
+          quota_infra_error = None
+
+          if first_err_row:
+              err_str = str(first_err_row["error"]).lower()
+              if any(kw in err_str for kw in AUTH_KEYWORDS):
+                  auth_error = f"Task {first_err_row['task_id']} Trial {first_err_row['trial_id']}: {first_err_row['error']}"
+              if infra_errors > 0 and any(kw in err_str for kw in QUOTA_KEYWORDS):
+                  quota_infra_error = f"Task {first_err_row['task_id']} Trial {first_err_row['trial_id']}: {first_err_row['error']}"
+
+          # Check api_calls.jsonl for persistent unretried auth errors
+          audit_log = Path("results/api_calls.jsonl")
+          if audit_log.exists() and not auth_error:
+              with open(audit_log, "r", encoding="utf-8") as f:
+                  for line in f:
+                      try:
+                          rec = json.loads(line)
+                          err_str = str(rec.get("error", "")).lower()
+                          if any(kw in err_str for kw in AUTH_KEYWORDS):
+                              auth_error = rec.get("error")
+                              break
+                      except Exception:
+                          pass
+
+          print(f"Run ID           : {run_id}")
+          print(f"Trials Completed : {completed} / {expected_trials} expected")
+          print(f"Successful Trials: {successful}")
+          print(f"Infra Errors     : {infra_errors}")
+
+          first_error = None
+          if first_err_row:
+              first_error = f"Task {first_err_row['task_id']} Trial {first_err_row['trial_id']}: {first_err_row['error']}"
+          elif auth_error:
+              first_error = auth_error
+
+          if first_error:
+              print(f"First Error      : {first_error}")
+
+          failed = False
+          if completed < expected_trials:
+              print(f"❌ [FAIL] Fewer trials completed than scheduled: {completed} < {expected_trials}")
+              failed = True
+
+          if infra_errors > 0:
+              print(f"❌ [FAIL] Benchmark had {infra_errors} infrastructure error(s)!")
+              if quota_infra_error:
+                  print(f"❌ [FAIL] Quota exhaustion caused trial failure: {quota_infra_error}")
+              failed = True
+
+          if auth_error:
+              print(f"❌ [FAIL] Authentication failure detected: {auth_error}")
+              failed = True
+
+          print("="*50)
+          if failed:
+              sys.exit(1)
+          print("✅ [PASS] Smoke benchmark completed all expected trials without infra/auth errors.")
+          EOF
+
+          if [ $RUN_EXIT -ne 0 ] || [ $VALIDATOR_EXIT -ne 0 ]; then
+            echo "❌ [FAIL] Smoke benchmark step failed (RUN_EXIT=$RUN_EXIT, VALIDATOR_EXIT=$VALIDATOR_EXIT)."
+            exit 1
+          fi
 
       - name: Evaluate Regression Gate
         id: gate_step
@@ -75,17 +199,17 @@ jobs:
           # Full 15-task benchmark uses 0.10 tolerance.
           # Optional Retry Rule: If the smoke gate fails on the tolerance rule, re-run the smoke subset once
           # and fail only if both runs fail.
+          GATE_EXIT=0
           uv run agentgate gate \
             --baseline "baselines/baseline_v1_steps30.json" \
             --candidate "$RUN_ID" \
-            --tolerance "${{ github.event.inputs.tolerance || '0.15' }}" > gate_output.txt 2>&1
-          GATE_EXIT=$?
+            --tolerance "${{ github.event.inputs.tolerance || '0.15' }}" > gate_output.txt 2>&1 || GATE_EXIT=$?
           echo "gate_exit=$GATE_EXIT" >> $GITHUB_OUTPUT
           cat gate_output.txt
           exit $GATE_EXIT
 
       - name: Post PR Comment
-        if: always() && github.event_name == 'pull_request'
+        if: always()
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,13 +222,19 @@ jobs:
             const statusEmoji = gatePassed ? '✅' : '❌';
             const statusText = gatePassed ? 'Regression Gate Passed' : 'Regression Gate Failed';
             
+            const runId = process.env.RUN_ID || 'smoke_candidate';
             const body = `### ${statusEmoji} AgentGate: ${statusText}\n\n` +
-                         `Evaluated candidate **\`${process.env.RUN_ID}\`** against canonical baseline **\`baseline_v1_steps30\`**:\n\n` +
+                         `Evaluated candidate **\`${runId}\`** against canonical baseline **\`baseline_v1_steps30\`**:\n\n` +
                          `\`\`\`text\n${output}\n\`\`\``;
             
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+            const issueNumber = context.issue?.number || (context.payload?.pull_request?.number);
+            if (issueNumber) {
+              await github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body
+              });
+            } else {
+              console.log("No pull request issue number found; skipping comment posting. Comment body:\n" + body);
+            }

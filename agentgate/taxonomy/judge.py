@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Callable, Coroutine, Dict, List, Optional
+
 from agentgate.taxonomy.models import FailureCategory, JudgeClassification
 
 JUDGE_SYSTEM_PROMPT = """You are an expert evaluator and taxonomist analyzing failed execution traces of an autonomous retail customer service agent.
