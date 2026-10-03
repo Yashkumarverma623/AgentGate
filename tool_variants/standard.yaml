@@ -1,0 +1,3 @@
+variant: "standard"
+description: "Default standard tool descriptions directly from domain benchmark definitions"
+tools: {}

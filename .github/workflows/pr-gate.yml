@@ -1,0 +1,110 @@
+name: Regression Gate (PR Smoke)
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: "Candidate Run ID"
+        required: false
+        default: "pr_candidate"
+      tolerance:
+        description: "Regression tolerance for smoke subset (default: 0.15 / 15 points; 0.10 for full 15-task runs)"
+        required: false
+        default: "0.15"
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  regression-gate:
+    # Strict security guardrail: Never expose secrets on third-party forks
+    if: |
+      (github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-gate')) &&
+      (github.event.pull_request.head.repo.full_name == github.repository || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}/vendor/tau-bench
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Checkout tau-bench vendor
+        run: |
+          git clone https://github.com/sierra-research/tau-bench.git vendor/tau-bench
+          git -C vendor/tau-bench checkout 59a200c6d575d595120f1cb70fea53cef0632f6b
+
+      - name: Install uv and dependencies
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv sync --frozen
+          uv pip install --no-deps -e vendor/tau-bench
+
+      - name: Run Stratified Smoke Benchmark
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          RUN_ID="pr_${{ github.event.pull_request.number || 'manual' }}_$(date +%s)"
+          echo "RUN_ID=$RUN_ID" >> $GITHUB_ENV
+          # Execute smoke benchmark subset (5 stratified tasks x k=2)
+          uv run agentgate run \
+            --run-id "$RUN_ID" \
+            --tasks "16,0,10,17,3" \
+            --trials 2 \
+            --max-steps 30 \
+            --model "gemini/gemini-3.1-flash-lite" \
+            --prompt-version "v1" \
+            --concurrency 3
+
+      - name: Evaluate Regression Gate
+        id: gate_step
+        run: |
+          mkdir -p results
+          # Run gate comparison against committed reference baseline JSON.
+          # Smoke subset uses 0.15 tolerance (single-trial drop = 10 pts; catches drops >= 20 pts).
+          # Full 15-task benchmark uses 0.10 tolerance.
+          # Optional Retry Rule: If the smoke gate fails on the tolerance rule, re-run the smoke subset once
+          # and fail only if both runs fail.
+          uv run agentgate gate \
+            --baseline "baselines/baseline_v1_steps30.json" \
+            --candidate "$RUN_ID" \
+            --tolerance "${{ github.event.inputs.tolerance || '0.15' }}" > gate_output.txt 2>&1
+          GATE_EXIT=$?
+          echo "gate_exit=$GATE_EXIT" >> $GITHUB_OUTPUT
+          cat gate_output.txt
+          exit $GATE_EXIT
+
+      - name: Post PR Comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let output = 'No output captured.';
+            if (fs.existsSync('gate_output.txt')) {
+              output = fs.readFileSync('gate_output.txt', 'utf8');
+            }
+            const gatePassed = '${{ steps.gate_step.outputs.gate_exit }}' === '0';
+            const statusEmoji = gatePassed ? '✅' : '❌';
+            const statusText = gatePassed ? 'Regression Gate Passed' : 'Regression Gate Failed';
+            
+            const body = `### ${statusEmoji} AgentGate: ${statusText}\n\n` +
+                         `Evaluated candidate **\`${process.env.RUN_ID}\`** against canonical baseline **\`baseline_v1_steps30\`**:\n\n` +
+                         `\`\`\`text\n${output}\n\`\`\``;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

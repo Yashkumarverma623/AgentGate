@@ -1,0 +1,63 @@
+version: "2026-09-30"
+description: "Official model pricing table for calculating would-have-cost and commercial equivalence"
+models:
+  gemini/gemini-3.1-flash-lite:
+    input_per_million: 0.100
+    output_per_million: 0.400
+    cached_input_per_million: 0.025
+    last_verified: "2026-09-30"
+  gemini/gemini-3.5-flash-lite:
+    input_per_million: 0.100
+    output_per_million: 0.400
+    cached_input_per_million: 0.025
+    last_verified: "2026-09-30"
+  gemini/gemini-2.5-flash:
+    input_per_million: 0.150
+    output_per_million: 0.600
+    cached_input_per_million: 0.0375
+    last_verified: "2026-09-30"
+  gemini/gemini-3.0-flash:
+    input_per_million: 0.150
+    output_per_million: 0.600
+    cached_input_per_million: 0.0375
+    last_verified: "2026-09-30"
+  gemini/gemini-2.0-flash:
+    input_per_million: 0.100
+    output_per_million: 0.400
+    cached_input_per_million: 0.025
+    last_verified: "2026-09-30"
+  gemini/gemini-1.5-flash:
+    input_per_million: 0.075
+    output_per_million: 0.300
+    cached_input_per_million: 0.01875
+    last_verified: "2026-09-30"
+  gemini/gemma-4-26b:
+    input_per_million: 0.000
+    output_per_million: 0.000
+    cached_input_per_million: 0.000
+    last_verified: "2026-09-30"
+  gemini/gemma-4-26b-a4b-it:
+    input_per_million: 0.000
+    output_per_million: 0.000
+    cached_input_per_million: 0.000
+    last_verified: "2026-09-30"
+  gemini/gemma-4-31b-it:
+    input_per_million: 0.000
+    output_per_million: 0.000
+    cached_input_per_million: 0.000
+    last_verified: "2026-09-30"
+  openai/gpt-4o-mini:
+    input_per_million: 0.150
+    output_per_million: 0.600
+    cached_input_per_million: 0.075
+    last_verified: "2026-09-30"
+  openai/gpt-4o:
+    input_per_million: 2.500
+    output_per_million: 10.000
+    cached_input_per_million: 1.250
+    last_verified: "2026-09-30"
+  anthropic/claude-3-5-haiku:
+    input_per_million: 0.800
+    output_per_million: 4.000
+    cached_input_per_million: 0.080
+    last_verified: "2026-09-30"

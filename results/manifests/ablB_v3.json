@@ -1,0 +1,43 @@
+{
+  "run_id": "ablB_v3",
+  "git_sha": "uncommitted_or_git_missing",
+  "benchmark_name": "tau-bench-retail",
+  "benchmark_commit_sha": "59a200c6d575d595120f1cb70fea53cef0632f6b",
+  "config_hash": "7c9350e54a6e",
+  "agent_config": {
+    "model": "gemini/gemini-3.1-flash-lite",
+    "temperature": 0.0,
+    "max_steps": 30,
+    "system_prompt_version": "v3",
+    "tool_description_variant": "standard",
+    "reasoning_mode": "none",
+    "user_model": "gemini/gemma-4-26b-a4b-it",
+    "user_strategy": "llm",
+    "timeout_seconds": 60.0
+  },
+  "prompt_version": "v3",
+  "prompt_hash": "399c766f95fe",
+  "tool_variant": "standard",
+  "tool_variant_hash": "5254accb695f",
+  "task_ids": [
+    16,
+    0,
+    10,
+    17,
+    3,
+    40,
+    22,
+    2,
+    31,
+    1
+  ],
+  "num_trials": 2,
+  "created_at": "2026-10-01T09:10:48.511299",
+  "status": "completed",
+  "total_trials": 20,
+  "completed_trials": 20,
+  "successful_trials": 17,
+  "infra_error_trials": 0,
+  "total_tokens": 1298973,
+  "total_would_have_cost": 0.1347438
+}
